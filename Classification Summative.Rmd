@@ -1,0 +1,185 @@
+---
+title: "Classification"
+output: html_document
+date: "2023-03-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+banks <- readr::read_csv("https://www.louisaslett.com/Courses/MISCADA/bank_personal_loan.csv")
+View(banks)
+```
+
+```{r}
+library("skimr")
+skim(banks)
+```
+```{r}
+library("tidyverse")
+library("ggplot2")
+```
+
+```{r}
+#ggplot(banks, aes(x = Personal.Loan)) +
+#  geom_bar()
+
+DataExplorer::plot_bar(banks, ncol = 3)
+DataExplorer::plot_histogram(banks, ncol = 3)
+DataExplorer::plot_boxplot(banks, by = "Personal.Loan", ncol = 3)
+```
+```{r}
+#install.packages("patchwork")
+library(patchwork)
+
+p1 <- ggplot(banks, aes(x = Personal.Loan, fill = factor(Securities.Account))) + geom_bar(position = "stack") +  scale_x_continuous(breaks=c(0,1))
+p2 <- ggplot(banks, aes(x = Personal.Loan, fill = factor(CD.Account))) + geom_bar(position = "stack") +  scale_x_continuous(breaks=c(0,1))
+p3 <- ggplot(banks, aes(x = Personal.Loan, fill = factor(Online))) + geom_bar(position = "stack") +  scale_x_continuous(breaks=c(0,1))
+p4 <- ggplot(banks, aes(x = Personal.Loan, fill = factor(CreditCard))) + geom_bar(position = "stack") +  scale_x_continuous(breaks=c(0,1))
+p5 <- ggplot(banks, aes(x = Personal.Loan, fill = factor(Education))) + geom_bar(position = "stack") +  scale_x_continuous(breaks=c(0,1))
+
+p1+p2
+p3+p4
+p5
+```
+```{r}
+ggplot(data = banks) + geom_point(mapping = aes(x = Income, y = Personal.Loan)) + scale_y_continuous(breaks=c(0,1))
+ggplot(data = banks) + geom_point(mapping = aes(x = Mortgage, y = Personal.Loan)) + scale_y_continuous(breaks=c(0,1))
+ggplot(data = banks) + geom_point(mapping = aes(x = CCAvg, y = Personal.Loan)) + scale_y_continuous(breaks=c(0,1))
+ggplot(data = banks) + geom_point(mapping = aes(x = Experience, y = Personal.Loan)) + scale_y_continuous(breaks=c(0,1))
+```
+```{r}
+library("GGally")
+
+ggpairs(data = banks, 
+        columns = c("Income","CCAvg","Education","Securities.Account"),
+        aes(color = factor(Personal.Loan))) 
+```
+```{r}
+banks[, 'Personal.Loan'] <- as.factor(banks$Personal.Loan) 
+
+loan_task <- TaskClassif$new(id = "BanksLoan",
+                               backend = banks, 
+                               target = 'Personal.Loan')
+loan_task
+```
+
+```{r}
+mlr_learners
+
+?mlr_learners_classif.log_reg
+```
+```{r}
+library("mlr3learners")
+learner_logreg = lrn("classif.log_reg")
+```
+
+```{r}
+# logistic regression 
+
+train_set = sample(loan_task$row_ids, 0.8 * loan_task$nrow)
+test_set = setdiff(loan_task$row_ids, train_set)
+
+learner_lr$train(loan_task, row_ids = train_set)
+
+learner_lr$model
+
+summary(learner_lr$model)
+```
+```{r}
+# random forest
+learner_rf = lrn("classif.ranger", importance = "permutation")
+learner_rf$train(loan_task, row_ids = train_set)
+
+learner_rf
+importance = as.data.table(learner_rf$importance(), keep.rownames = TRUE)
+colnames(importance) = c("Feature", "Importance")
+
+ggplot(data=importance,
+       aes(x = reorder(Feature, Importance), y = Importance)) + 
+  geom_col() + coord_flip() + xlab("")
+
+```
+```{r}
+# Decision Tree
+learner_dt = lrn("classif.rpart")
+learner_dt$train(loan_task, row_ids = train_set)
+
+learner_dt$model
+
+summary(learner_dt$model)
+```
+
+```{r}
+pred_lr <- learner_lr$predict(loan_task)
+pred_rf <- learner_rf$predict(loan_task)
+pred_dt <- learner_dt$predict(loan_task)
+
+pred_lr
+pred_rf
+pred_dt
+
+acc_lr <- pred_lr$score(msr("classif.acc"))
+acc_rf <- pred_rf$score(msr("classif.acc"))
+acc_dt <- pred_dt$score(msr("classif.acc"))
+
+pred_lr$confusion
+pred_rf$confusion
+pred_dt$confusion
+```
+```{r}
+accuracy <- data.frame(model_name = c('logistic regression','random forest','Decision Tree'), accuracy = c(acc_lr,acc_rf,acc_dt), check.names = FALSE)
+
+accuracy
+
+```
+
+```{r}
+mlr_measures
+```
+```{r}
+mlr_resamplings
+?mlr_resamplings_cv
+
+cv5 <- rsmp("cv", folds = 5)
+cv5_lr <- resample(loan_task, learner_lr, cv5)
+cv5_rf <- resample(loan_task, learner_rf, cv5)
+
+cv5_lr$aggregate()
+cv5_rf$aggregate()
+
+```
+```{r}
+lrn_lr <- lrn("classif.log_reg", predict_type = "prob")
+lrn_rf <- lrn("classif.ranger", predict_type = "prob")
+
+lrn_lr$param_set
+lrn_rf$param_set
+
+res <- benchmark(data.table(
+  task       = list(loan_task),
+  learner    = list(lrn_lr,
+                    lrn_rf),
+  resampling = list(cv5)
+), store_models = TRUE)
+res
+res$aggregate()
+
+```
+```{r}
+res$aggregate(list(msr("classif.ce"),
+                   msr("classif.acc"),
+                   msr("classif.auc"),
+                   msr("classif.fpr"),
+                   msr("classif.fnr")))
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
